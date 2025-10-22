@@ -40,6 +40,7 @@ articles_percent_by_author = df.groupBy("author") \
     .orderBy(col("% of articles").desc()) \
     .drop("article_count")
 
+articles_percent_by_day.show(50, truncate=False)
 articles_percent_by_author.coalesce(1).write.mode("overwrite") \
     .csv(f"{HDFS_URI}/output/spacenews/articles_percent_by_author", header=False, sep=" ")
 
