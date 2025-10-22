@@ -3,6 +3,9 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/docs" />
+      <excludeFolder url="file://$MODULE_DIR$/screenshots" />
+      <excludeFolder url="file://$MODULE_DIR$/spark_logs" />
     </content>
     <orderEntry type="jdk" jdkName="uv (bdm)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
