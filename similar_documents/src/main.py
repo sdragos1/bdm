@@ -3,21 +3,57 @@ import hashlib
 import random
 import re
 import xml.etree.ElementTree as Element
-from collections import defaultdict
-from typing import List, Dict, Tuple, Iterator, Any
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Iterator
 
-from pyspark.sql import SparkSession
-from pyspark.sql.types import StructField, StringType, StructType, IntegerType
-from pyspark.sql.functions import col, count as spark_count, collect_list, explode, array, lit
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.sql.functions import col
+from pyspark.sql.types import IntegerType
 
-# HDFS configuration
 HDFS_NAMENODE: str = "hdfs://192.168.0.12:9000"
 DATA_DIR: str = f"{HDFS_NAMENODE}/input/similar_documents"
 OUTPUT_DIR: str = f"{HDFS_NAMENODE}/output/similar_documents"
 
 
-def parse_reuters_xml(xml_content: str) -> List[Dict[str, Any]]:
-    documents: List[Dict[str, Any]] = []
+@dataclass
+class EffectivenessMetrics:
+    true_positives: int
+    false_positives: int
+    false_negatives: int
+    true_negatives: int
+    accuracy: float
+    precision: float
+    recall: float
+    f1_score: float
+    documents_with_no_topics: int = 0
+
+    def print_metrics(self):
+        print("\n" + "=" * 80)
+        print("EFFECTIVENESS METRICS")
+        print("=" * 80)
+        print(f"True Positives (TP):   {self.true_positives:,}")
+        print(f"False Positives (FP):  {self.false_positives:,}")
+        print(f"False Negatives (FN):  {self.false_negatives:,}")
+        print(f"True Negatives (TN):   {self.true_negatives:,}")
+        print("-" * 80)
+        print(f"Accuracy:              {self.accuracy:.4f} ({self.accuracy * 100:.2f}%)")
+        print(f"Precision:             {self.precision:.4f} ({self.precision * 100:.2f}%)")
+        print(f"Recall (Sensitivity):  {self.recall:.4f} ({self.recall * 100:.2f}%)")
+        print(f"F1 Score:              {self.f1_score:.4f}")
+        print("-" * 80)
+        print(f"Document with no topics:   {self.documents_with_no_topics:,}")
+        print("=" * 80)
+
+
+@dataclass
+class Document:
+    newid: str
+    body: str
+    topics: List[str]
+
+
+def parse_reuters_xml(xml_content: str, test_mode: bool) -> List[Document]:
+    documents: List[Document] = []
     reuters_pattern: str = r'<REUTERS[^>]*>.*?</REUTERS>'
     doc_matches: List[str] = re.findall(reuters_pattern, xml_content, re.DOTALL)
 
@@ -26,28 +62,24 @@ def parse_reuters_xml(xml_content: str) -> List[Dict[str, Any]]:
             document = re.sub(r'&#\d+;', ' ', document)
             root = Element.fromstring(document)
 
+            test_split = root.get('LEWISSPLIT', '') == 'TEST'
+            if test_mode and not test_split:
+                continue
+
             newid: str = root.get('NEWID', '')
 
-            title: str = ''
             body: str = ''
 
             text_elem = root.find('TEXT')
             if text_elem is not None:
-                title_elem = text_elem.find('TITLE')
-                if title_elem is not None and title_elem.text:
-                    title = title_elem.text.strip()
-
                 body_elem = text_elem.find('BODY')
                 if body_elem is not None and body_elem.text:
                     body = body_elem.text.strip()
 
-            text = f"{title} {body}".strip()
-            if text:  # Only include documents with text
-                documents.append({
-                    'newid': newid,
-                    'title': title,
-                    'text': text
-                })
+            topics: list[str] = [d.text for d in root.findall('./TOPICS/D') if d.text]
+
+            doc = Document(newid=newid, body=body, topics=topics)
+            documents.append(doc)
         except:
             continue
 
@@ -58,7 +90,6 @@ def generate_k_shingles(text: str, k: int) -> List[str]:
     if not text or len(text) < k:
         return []
     text = ' '.join(text.lower().split())
-    # Use set directly, no need to sort for hash-based operations
     return list(set(text[i:i + k] for i in range(len(text) - k + 1)))
 
 
@@ -70,7 +101,6 @@ def generate_minhash_signature(shingles_list: List[str], num_hashes: int, hash_p
     prime: int = 2147483647
     signature: List[int] = [prime] * num_hashes
 
-    # Pre-compute shingle hashes
     shingle_hashes = [int(hashlib.md5(shg.encode()).hexdigest(), 16) % prime for shg in shingles_list]
 
     for i, (a, b) in enumerate(hash_params):
@@ -104,17 +134,61 @@ def generate_lsh_bands(signature: List[int], bands_len: int, rows_per_band: int,
     return bands
 
 
-def process_partition(documents_iter: Iterator[Dict[str, Any]], k: int, num_hashes: int,
+def process_partition(documents_iter: Iterator[Document], k: int, num_hashes: int,
                       bands_len: int, rows_per_band: int, hash_params: List[Tuple[int, int]],
                       band_hash_params: List[List[Tuple[int, int]]]) -> Iterator[
     Tuple[str, str, List[str], List[int], List[Tuple[int, str]]]]:
     for document in documents_iter:
-        if document['text']:
-            shingles_list: List[str] = generate_k_shingles(document['text'], k)
+        if document.body:
+            shingles_list: List[str] = generate_k_shingles(document.body, k)
             if shingles_list:
                 signature: List[int] = generate_minhash_signature(shingles_list, num_hashes, hash_params)
                 bands: List[Tuple[int, str]] = generate_lsh_bands(signature, bands_len, rows_per_band, band_hash_params)
-                yield (document['newid'], document['title'], shingles_list, signature, bands)
+                yield document.newid, document.body, shingles_list, signature, bands
+
+
+def compute_effectiveness_metrics(candidate_pairs_df: DataFrame, all_docs: List[Document]) -> EffectivenessMetrics:
+    doc_topics: Dict[str, set] = {doc.newid: set(doc.topics) for doc in all_docs if doc.topics}
+    doc_ids = list(doc_topics.keys())
+
+    candidate_set = set()
+    for row in candidate_pairs_df.collect():
+        candidate_set.add((row.doc_id_1, row.doc_id_2))
+        candidate_set.add((row.doc_id_2, row.doc_id_1))
+
+    tp = fp = fn = tn = 0
+
+    for i in range(len(doc_ids)):
+        for j in range(i + 1, len(doc_ids)):
+            d1, d2 = doc_ids[i], doc_ids[j]
+            actual_similar = len(doc_topics[d1].intersection(doc_topics[d2])) > 0
+            predicted_similar = (d1, d2) in candidate_set
+
+            if predicted_similar and actual_similar:
+                tp += 1
+            elif predicted_similar and not actual_similar:
+                fp += 1
+            elif not predicted_similar and actual_similar:
+                fn += 1
+            else:
+                tn += 1
+
+    accuracy = (tp + tn) / (tp + tn + fp + fn)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1_score = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return EffectivenessMetrics(
+        true_positives=tp,
+        false_positives=fp,
+        false_negatives=fn,
+        true_negatives=tn,
+        accuracy=accuracy,
+        precision=precision,
+        recall=recall,
+        f1_score=f1_score,
+        documents_with_no_topics=len(all_docs) - len(doc_topics)
+    )
 
 
 if __name__ == "__main__":
@@ -127,8 +201,11 @@ if __name__ == "__main__":
                         help='Number of bands (default: 20)')
     parser.add_argument('--r', type=int, default=None,
                         help='Number of rows per band (default: H/b)')
-    parser.add_argument('--band-hashes', type=int, default=1,
+    parser.add_argument('--band-hashes', type=int, default=2,
                         help='Number of hash functions for hashing each band (default: 1)')
+    parser.add_argument('--test', action='store_true', default=False,
+                        help='Run the pipeline on the test split (default: False)'
+                        )
 
     args = parser.parse_args()
 
@@ -136,14 +213,15 @@ if __name__ == "__main__":
     NUM_HASHES = args.H
     NUM_BANDS = args.b
 
-    if args.r is not None:
-        ROWS_PER_BAND = args.r
-        if NUM_HASHES != NUM_BANDS * ROWS_PER_BAND:
-            print(f"Warning: H ({NUM_HASHES}) != b ({NUM_BANDS}) * r ({ROWS_PER_BAND})")
-    else:
+    if args.r is None:
         ROWS_PER_BAND = NUM_HASHES // NUM_BANDS
         if NUM_HASHES % NUM_BANDS != 0:
-            print(f"Warning: H ({NUM_HASHES}) is not divisible by b ({NUM_BANDS})")
+            print(f"Warning: H ({NUM_HASHES}) not divisible by b ({NUM_BANDS}), using r={ROWS_PER_BAND}")
+    else:
+        ROWS_PER_BAND = args.r
+        NUM_BANDS = NUM_HASHES // ROWS_PER_BAND
+        if NUM_HASHES % ROWS_PER_BAND != 0:
+            raise ValueError("H must be multiple of r")
 
     NUM_BAND_HASHES = args.band_hashes
 
@@ -168,9 +246,8 @@ if __name__ == "__main__":
     sc = spark.sparkContext
     sc.setLogLevel("WARN")
 
-    # Pre-generate hash parameters (broadcast once)
     prime = 2147483647
-    random.seed(42)  # For reproducibility
+    random.seed(42)
     hash_params = [(random.randint(1, prime - 1), random.randint(0, prime - 1)) for _ in range(NUM_HASHES)]
 
     band_hash_params = []
@@ -181,15 +258,14 @@ if __name__ == "__main__":
 
     print("\nLoading Reuters files from HDFS...")
 
-    # Read all files at once using wildcard
     file_paths = [f"{DATA_DIR}/reut2-{i:03d}.sgm" for i in range(22)]
 
-    all_documents = []
+    all_documents: List[Document] = []
     for file_path in file_paths:
         try:
             file_rdd = sc.textFile(file_path)
             content = "\n".join(file_rdd.collect())
-            docs = parse_reuters_xml(content)
+            docs = parse_reuters_xml(content, args.test)
             all_documents.extend(docs)
         except Exception as e:
             print(f"Error loading {file_path}: {e}")
@@ -202,11 +278,9 @@ if __name__ == "__main__":
         spark.stop()
         exit(1)
 
-    # Broadcast hash parameters
     hash_params_bc = sc.broadcast(hash_params)
     band_hash_params_bc = sc.broadcast(band_hash_params)
 
-    # Process documents in parallel
     docs_rdd = sc.parallelize(all_documents, numSlices=8)
 
 
@@ -219,7 +293,6 @@ if __name__ == "__main__":
 
     processed_rdd = docs_rdd.mapPartitions(process_with_params).cache()
 
-    # Get count without collecting all data
     num_processed = processed_rdd.count()
 
     if num_processed == 0:
@@ -227,14 +300,12 @@ if __name__ == "__main__":
         spark.stop()
         exit(1)
 
-    print(f"\nProcessing {num_processed} documents...")
+    print(f"\nProcessing {num_processed} documents... (only those with body and shingles)")
 
-    # === OPTIMIZATION 1: Use RDD operations for set representation ===
     print("\n" + "=" * 80)
     print("Generating Set Representation (MxN matrix)...")
     print("=" * 80)
 
-    # Create RDD directly from processed_rdd without collecting
     from pyspark.sql import Row
 
     shingle_doc_rdd = processed_rdd.flatMap(
@@ -248,12 +319,10 @@ if __name__ == "__main__":
     set_rep_df.repartition(4).write.mode("overwrite").csv(set_rep_path, header=True, sep=",")
     print(f"Set representation saved: {set_rep_df.count()} entries")
 
-    # === OPTIMIZATION 2: Use RDD operations for signatures ===
     print("\n" + "=" * 80)
     print("Generating MinHash Signatures (HxN matrix)...")
     print("=" * 80)
 
-    # Create RDD directly from processed_rdd without collecting
     signature_rdd = processed_rdd.flatMap(
         lambda x: [Row(hash_function_index=str(i), doc_id=x[0], signature_value=str(sig_val))
                    for i, sig_val in enumerate(x[3])]
@@ -266,37 +335,35 @@ if __name__ == "__main__":
     sig_df.repartition(4).write.mode("overwrite").csv(sig_path, header=True, sep=",")
     print(f"MinHash signatures saved: {sig_df.count()} entries")
 
-    # === OPTIMIZATION 3: Use RDD operations for candidate pairs ===
     print("\n" + "=" * 80)
     print("Finding Candidate Pairs...")
     print("=" * 80)
 
-    # Extract bands and create (band_id, band_hash, doc_id) tuples
     bands_rdd = processed_rdd.flatMap(
         lambda x: [((band_id, band_hash), x[0]) for band_id, band_hash in x[4]]
     )
 
-    # Group by (band_id, band_hash) to find documents in same bucket
     buckets_rdd = bands_rdd.groupByKey().mapValues(list)
 
 
-    # Generate pairs from buckets and count band co-occurrences
     def generate_pairs(bucket_docs):
-        pairs = []
         docs = list(bucket_docs)
-        if len(docs) > 1:
-            for i in range(len(docs)):
-                for j in range(i + 1, len(docs)):
-                    pair = tuple(sorted([docs[i], docs[j]]))
-                    pairs.append((pair, 1))
+
+        if len(docs) < 1:
+            return []
+        pairs = []
+
+        for i in range(len(docs)):
+            for j in range(i + 1, len(docs)):
+                pair = tuple(sorted([docs[i], docs[j]]))
+                pairs.append((pair, 1))
         return pairs
 
 
     pair_counts_rdd = buckets_rdd.flatMap(lambda x: generate_pairs(x[1])) \
         .reduceByKey(lambda a, b: a + b) \
-        .filter(lambda x: x[1] > 1)  # Only pairs in 2+ bands
+        .filter(lambda x: x[1] >= 1)
 
-    # Convert to DataFrame directly without collecting
     candidate_pairs_rdd = pair_counts_rdd.map(
         lambda x: Row(doc_id_1=x[0][0], doc_id_2=x[0][1], num_bands=str(x[1]))
     )
@@ -316,6 +383,9 @@ if __name__ == "__main__":
         print(f"Candidate pairs saved: {num_candidates} pairs")
         candidate_df.show(20, truncate=False)
 
+    metrics = compute_effectiveness_metrics(candidate_df, all_documents)
+    metrics.print_metrics()
+
     print("\n" + "=" * 80)
     print("Pipeline completed!")
     print("=" * 80)
@@ -325,7 +395,6 @@ if __name__ == "__main__":
     print(f"  3. Candidate Pairs: {OUTPUT_DIR}/candidate_pairs")
     print("=" * 80)
 
-    # Cleanup
     hash_params_bc.unpersist()
     band_hash_params_bc.unpersist()
     processed_rdd.unpersist()
