@@ -17,6 +17,8 @@ NUM_BANDS = 20
 ROWS_PER_BAND = NUM_HASHES // NUM_BANDS
 SIMILARITY_THRESHOLD = 0.8
 
+last_loaded_document_id: None | int = None
+
 
 def parse_reuters_xml(xml_content):
     """Parse Reuters XML/SGML content and extract documents"""
@@ -64,7 +66,9 @@ def parse_reuters_xml(xml_content):
                 if dateline_elem is not None and dateline_elem.text:
                     dateline = dateline_elem.text.strip()
 
-            if title or body:
+                if body == '':
+                    print(f"Empty body for document NEWID={newid}")
+
                 documents.append({
                     'newid': newid,
                     'oldid': oldid,
@@ -78,9 +82,10 @@ def parse_reuters_xml(xml_content):
                     'body': body,
                     'text': f"{title} {body}".strip()
                 })
+            else:
+                print(newid)
         except:
             continue
-
     return documents
 
 
@@ -161,6 +166,7 @@ def load_reuters_documents(data_dir):
         print(f"Error: No .sgm files found in {data_dir}")
         return []
 
+    total_docs = 0;
     for file_path in sgm_files:
         try:
             print(f"Loading {file_path.name}...", end=" ")
@@ -171,13 +177,17 @@ def load_reuters_documents(data_dir):
             docs = parse_reuters_xml(content)
             all_documents.extend(docs)
 
+            print(f"Last loaded document ID: {docs[-1]['newid'] if docs else 'N/A'} ", end="")
             print(f"({len(docs)} documents)")
+            total_docs += len(docs)
 
         except Exception as e:
             print(f"Error: {e}")
             continue
 
+    print(f"\nTotal documents: {total_docs}")
     print(f"\nTotal documents loaded: {len(all_documents)}")
+    exit(0)
     return all_documents
 
 

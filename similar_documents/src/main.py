@@ -4,46 +4,47 @@ import random
 import re
 import xml.etree.ElementTree as Element
 from collections import defaultdict
+from typing import List, Dict, Tuple, Iterator, Any
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructField, StringType, StructType
 
 # HDFS configuration
-HDFS_NAMENODE = "hdfs://192.168.0.12:9000"
-DATA_DIR = f"{HDFS_NAMENODE}/input/similar_documents"
-OUTPUT_DIR = f"{HDFS_NAMENODE}/output/similar_documents"
+HDFS_NAMENODE: str = "hdfs://192.168.0.12:9000"
+DATA_DIR: str = f"{HDFS_NAMENODE}/input/similar_documents"
+OUTPUT_DIR: str = f"{HDFS_NAMENODE}/output/similar_documents"
 
 
-def parse_reuters_xml(xml_content):
-    documents = []
-    reuters_pattern = r'<REUTERS[^>]*>.*?</REUTERS>'
-    doc_matches = re.findall(reuters_pattern, xml_content, re.DOTALL)
+def parse_reuters_xml(xml_content: str) -> List[Dict[str, Any]]:
+    documents: List[Dict[str, Any]] = []
+    reuters_pattern: str = r'<REUTERS[^>]*>.*?</REUTERS>'
+    doc_matches: List[str] = re.findall(reuters_pattern, xml_content, re.DOTALL)
 
-    for doc in doc_matches:
+    for document in doc_matches:
         try:
-            doc = re.sub(r'&#\d+;', ' ', doc)
-            root = Element.fromstring(doc)
+            document = re.sub(r'&#\d+;', ' ', document)
+            root = Element.fromstring(document)
 
-            newid = root.get('NEWID', '')
-            oldid = root.get('OLDID', '')
+            newid: str = root.get('NEWID', '')
+            oldid: str = root.get('OLDID', '')
 
             date_elem = root.find('DATE')
-            date = date_elem.text.strip() if date_elem is not None and date_elem.text else ''
+            date: str = date_elem.text.strip() if date_elem is not None and date_elem.text else ''
 
-            def get_list(tag_name):
+            def get_list(tag_name: str) -> List[str]:
                 elem = root.find(tag_name)
                 if elem is not None:
                     return [d.text.strip() for d in elem.findall('D') if d.text]
                 return []
 
-            places = get_list('PLACES')
-            topics = get_list('TOPICS')
-            people = get_list('PEOPLE')
-            orgs = get_list('ORGS')
+            places: List[str] = get_list('PLACES')
+            topics: List[str] = get_list('TOPICS')
+            people: List[str] = get_list('PEOPLE')
+            orgs: List[str] = get_list('ORGS')
 
-            title = ''
-            body = ''
-            dateline = ''
+            title: str = ''
+            body: str = ''
+            dateline: str = ''
 
             text_elem = root.find('TEXT')
             if text_elem is not None:
@@ -59,49 +60,48 @@ def parse_reuters_xml(xml_content):
                 if dateline_elem is not None and dateline_elem.text:
                     dateline = dateline_elem.text.strip()
 
-            if title or body:
-                documents.append({
-                    'newid': newid,
-                    'oldid': oldid,
-                    'date': date,
-                    'topics': topics,
-                    'places': places,
-                    'people': people,
-                    'orgs': orgs,
-                    'title': title,
-                    'dateline': dateline,
-                    'body': body,
-                    'text': f"{title} {body}".strip()
-                })
+            documents.append({
+                'newid': newid,
+                'oldid': oldid,
+                'date': date,
+                'topics': topics,
+                'places': places,
+                'people': people,
+                'orgs': orgs,
+                'title': title,
+                'dateline': dateline,
+                'body': body,
+                'text': f"{title} {body}".strip()
+            })
         except:
             continue
 
     return documents
 
 
-def generate_k_shingles(text, k):
+def generate_k_shingles(text: str, k: int) -> List[str]:
     if not text or len(text) < k:
         return []
     text = ' '.join(text.lower().split())
     return sorted(list(set(text[i:i + k] for i in range(len(text) - k + 1))))
 
 
-def generate_minhash_signature(shingles, num_hashes):
-    if not shingles:
+def generate_minhash_signature(shingles_list: List[str], num_hashes: int) -> List[int]:
+    if not shingles_list:
         return [2147483647] * num_hashes
 
-    signature = []
-    prime = 2147483647
+    signature: List[int] = []
+    prime: int = 2147483647
 
     for i in range(num_hashes):
         random.seed(i)
-        a = random.randint(1, prime - 1)
-        b = random.randint(0, prime - 1)
+        a: int = random.randint(1, prime - 1)
+        b: int = random.randint(0, prime - 1)
 
-        min_hash = prime
-        for shingle in shingles:
-            shingle_hash = int(hashlib.md5(shingle.encode()).hexdigest(), 16) % prime
-            hash_value = (a * shingle_hash + b) % prime
+        min_hash: int = prime
+        for shg in shingles_list:
+            shingle_hash: int = int(hashlib.md5(shg.encode()).hexdigest(), 16) % prime
+            hash_value: int = (a * shingle_hash + b) % prime
             if hash_value < min_hash:
                 min_hash = hash_value
 
@@ -110,44 +110,46 @@ def generate_minhash_signature(shingles, num_hashes):
     return signature
 
 
-def generate_lsh_bands(signature, num_bands, rows_per_band, num_band_hashes):
-    bands = []
-    prime = 2147483647
-    
-    for band_id in range(num_bands):
-        start_idx = band_id * rows_per_band
-        end_idx = start_idx + rows_per_band
-        band_values = tuple(signature[start_idx:end_idx])
-        
-        band_hashes = []
-        for hash_idx in range(num_band_hashes):
-            random.seed(band_id * 1000 + hash_idx)
-            a = random.randint(1, prime - 1)
-            b = random.randint(0, prime - 1)
-            
-            band_str = str(band_values)
-            band_int_hash = int(hashlib.md5(band_str.encode()).hexdigest(), 16) % prime
-            hash_value = (a * band_int_hash + b) % prime
+def generate_lsh_bands(signature: List[int], bands_len: int, rows_per_band: int, num_band_hashes: int) -> List[
+    Tuple[int, str]]:
+    bands: List[Tuple[int, str]] = []
+    prime: int = 2147483647
+
+    for band_idx in range(bands_len):
+        start_idx: int = band_idx * rows_per_band
+        end_idx: int = start_idx + rows_per_band
+        band_values: Tuple[int, ...] = tuple(signature[start_idx:end_idx])
+
+        band_hashes: List[int] = []
+        for hash_index in range(num_band_hashes):
+            random.seed(band_idx * 1000 + hash_index)
+            a: int = random.randint(1, prime - 1)
+            b: int = random.randint(0, prime - 1)
+
+            band_str: str = str(band_values)
+            band_int_hash: int = int(hashlib.md5(band_str.encode()).hexdigest(), 16) % prime
+            hash_value: int = (a * band_int_hash + b) % prime
             band_hashes.append(hash_value)
-        
-        combined_hash = hashlib.md5(str(tuple(band_hashes)).encode()).hexdigest()
-        bands.append((band_id, combined_hash))
-    
+
+        combined_hash: str = hashlib.md5(str(tuple(band_hashes)).encode()).hexdigest()
+        bands.append((band_idx, combined_hash))
+
     return bands
 
 
-def process_partition(documents_iter, k, num_hashes, num_bands, rows_per_band, num_band_hashes):
-    processed = []
-    for doc in documents_iter:
-        if doc['text']:
-            shingles = generate_k_shingles(doc['text'], k)
-            if shingles:
-                signature = generate_minhash_signature(shingles, num_hashes)
-                bands = generate_lsh_bands(signature, num_bands, rows_per_band, num_band_hashes)
+def process_partition(documents_iter: Iterator[Dict[str, Any]], k: int, num_hashes: int, bands_len: int,
+                      rows_per_band: int, num_band_hashes: int) -> Iterator[Dict[str, Any]]:
+    processed: List[Dict[str, Any]] = []
+    for document in documents_iter:
+        if document['text']:
+            shingles_list: List[str] = generate_k_shingles(document['text'], k)
+            if shingles_list:
+                signature: List[int] = generate_minhash_signature(shingles_list, num_hashes)
+                bands: List[Tuple[int, str]] = generate_lsh_bands(signature, bands_len, rows_per_band, num_band_hashes)
                 processed.append({
-                    'doc_id': doc['newid'],
-                    'title': doc['title'],
-                    'shingles': shingles,
+                    'doc_id': document['newid'],
+                    'title': document['title'],
+                    'shingles': shingles_list,
                     'signature': signature,
                     'bands': bands
                 })
@@ -157,24 +159,24 @@ def process_partition(documents_iter, k, num_hashes, num_bands, rows_per_band, n
 if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description='LSH Similar Documents Pipeline')
-    parser.add_argument('--k', type=int, default=5, 
-                       help='k-shingle size (default: 5)')
-    parser.add_argument('--H', type=int, default=100, 
-                       help='Number of MinHash functions (default: 100)')
-    parser.add_argument('--b', type=int, default=20, 
-                       help='Number of bands (default: 20)')
+    parser.add_argument('--k', type=int, default=5,
+                        help='k-shingle size (default: 5)')
+    parser.add_argument('--H', type=int, default=100,
+                        help='Number of MinHash functions (default: 100)')
+    parser.add_argument('--b', type=int, default=20,
+                        help='Number of bands (default: 20)')
     parser.add_argument('--r', type=int, default=None,
-                       help='Number of rows per band (default: H/b)')
+                        help='Number of rows per band (default: H/b)')
     parser.add_argument('--band-hashes', type=int, default=1,
-                       help='Number of hash functions for hashing each band (default: 1)')
-    
+                        help='Number of hash functions for hashing each band (default: 1)')
+
     args = parser.parse_args()
-    
+
     # Set parameters
     K_SHINGLE_SIZE = args.k
     NUM_HASHES = args.H
     NUM_BANDS = args.b
-    
+
     # Calculate rows per band
     if args.r is not None:
         ROWS_PER_BAND = args.r
@@ -185,10 +187,11 @@ if __name__ == "__main__":
         ROWS_PER_BAND = NUM_HASHES // NUM_BANDS
         if NUM_HASHES % NUM_BANDS != 0:
             print(f"Warning: H ({NUM_HASHES}) is not divisible by b ({NUM_BANDS})")
-            print(f"Using r={ROWS_PER_BAND}, which means {NUM_HASHES - NUM_BANDS * ROWS_PER_BAND} hash functions will be unused")
-    
+            print(
+                f"Using r={ROWS_PER_BAND}, which means {NUM_HASHES - NUM_BANDS * ROWS_PER_BAND} hash functions will be unused")
+
     NUM_BAND_HASHES = args.band_hashes
-    
+
     print("=" * 80)
     print("LSH Similar Documents Pipeline - Configuration")
     print("=" * 80)
@@ -199,7 +202,7 @@ if __name__ == "__main__":
     print(f"Number of hash functions per band: {NUM_BAND_HASHES}")
     print(f"Total signature length: {NUM_BANDS * ROWS_PER_BAND}")
     print("=" * 80)
-    
+
     spark = SparkSession.builder.appName("Reuters Similar Documents").master(
         "spark://192.168.0.2:7077").getOrCreate()
 
@@ -242,16 +245,17 @@ if __name__ == "__main__":
 
     params = (K_SHINGLE_SIZE, NUM_HASHES, NUM_BANDS, ROWS_PER_BAND, NUM_BAND_HASHES)
     params_bc = sc.broadcast(params)
-    
+
+
     def process_with_params(docs_iter):
         k, num_h, num_b, r, num_bh = params_bc.value
         return process_partition(docs_iter, k, num_h, num_b, r, num_bh)
-    
+
+
     processed_rdd = docs_rdd.mapPartitions(process_with_params)
     processed_docs = processed_rdd.collect()
-    
-    params_bc.destroy()
 
+    params_bc.destroy()
 
     if not processed_docs:
         print("No documents with shingles found. Exiting.")
@@ -262,12 +266,12 @@ if __name__ == "__main__":
 
     doc_shingles_map = {doc['doc_id']: doc['shingles'] for doc in processed_docs}
     doc_signatures_map = {doc['doc_id']: doc['signature'] for doc in processed_docs}
-    
+
     all_shingles = set()
     for shingles in doc_shingles_map.values():
         all_shingles.update(shingles)
     all_shingles = sorted(list(all_shingles))
-    
+
     print(f"Total unique shingles: {len(all_shingles)}")
     print(f"Total documents: {len(processed_docs)}")
     print(f"Number of hash functions (H): {NUM_HASHES}")
@@ -277,7 +281,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("Generating Set Representation (MxN matrix)...")
     print("=" * 80)
-    
+
     set_representation = []
     for shingle in all_shingles:
         for doc_id in doc_shingles_map.keys():
@@ -288,13 +292,13 @@ if __name__ == "__main__":
                     'doc_id': doc_id,
                     'value': str(value)
                 })
-    
+
     set_rep_schema = StructType([
         StructField("shingle", StringType(), False),
         StructField("doc_id", StringType(), False),
         StructField("value", StringType(), False)
     ])
-    
+
     set_rep_df = spark.createDataFrame(set_representation, set_rep_schema)
     set_rep_path = f"{OUTPUT_DIR}/set_representation"
     print(f"Saving set representation to {set_rep_path}...")
@@ -308,7 +312,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("Generating MinHash Signatures (HxN matrix)...")
     print("=" * 80)
-    
+
     signature_matrix = []
     for hash_idx in range(NUM_HASHES):
         for doc_id in doc_signatures_map.keys():
@@ -318,13 +322,13 @@ if __name__ == "__main__":
                 'doc_id': doc_id,
                 'signature_value': str(signature_value)
             })
-    
+
     sig_schema = StructType([
         StructField("hash_function_index", StringType(), False),
         StructField("doc_id", StringType(), False),
         StructField("signature_value", StringType(), False)
     ])
-    
+
     sig_df = spark.createDataFrame(signature_matrix, sig_schema)
     sig_path = f"{OUTPUT_DIR}/minhash_signatures"
     print(f"Saving MinHash signatures to {sig_path}...")
@@ -338,21 +342,21 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("Finding Candidate Pairs (same bucket in more than one band)...")
     print("=" * 80)
-    
+
     pair_band_count = defaultdict(int)
-    
+
     band_buckets = defaultdict(list)
     for doc in processed_docs:
         for band_id, band_hash in doc['bands']:
             band_buckets[(band_id, band_hash)].append(doc['doc_id'])
-    
+
     for bucket_docs in band_buckets.values():
         if len(bucket_docs) > 1:
             for i in range(len(bucket_docs)):
                 for j in range(i + 1, len(bucket_docs)):
                     doc_id1, doc_id2 = sorted([bucket_docs[i], bucket_docs[j]])
                     pair_band_count[(doc_id1, doc_id2)] += 1
-    
+
     candidate_pairs = []
     for (doc_id1, doc_id2), num_bands in pair_band_count.items():
         if num_bands > 1:
@@ -361,9 +365,9 @@ if __name__ == "__main__":
                 'doc_id_2': doc_id2,
                 'num_bands': str(num_bands)
             })
-    
+
     candidate_pairs.sort(key=lambda x: x['num_bands'], reverse=True)
-    
+
     if not candidate_pairs:
         print("No candidate pairs found (pairs in more than one band).")
         print("Try adjusting --b (number of bands) or --H (number of hash functions).")
@@ -373,7 +377,7 @@ if __name__ == "__main__":
             StructField("doc_id_2", StringType(), False),
             StructField("num_bands", StringType(), False)
         ])
-        
+
         candidate_df = spark.createDataFrame(candidate_pairs, candidate_schema)
         candidate_path = f"{OUTPUT_DIR}/candidate_pairs"
         print(f"Saving candidate pairs to {candidate_path}...")
