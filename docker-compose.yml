@@ -10,27 +10,12 @@ services:
       - CLUSTER_NAME=test
       - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
       - HDFS_CONF_dfs_replication=1
-      - HDFS_CONF_dfs_permissions_enabled=false
       - HDFS_CONF_dfs_webhdfs_enabled=true
       - HDFS_CONF_dfs_permissions_enabled=false
     networks:
       - bigdata-net
     volumes:
       - namenode-data:/hadoop/dfs/name
-
-  hue:
-    image: gethue/hue:latest
-    container_name: hue
-    ports:
-      - "8888:8888"
-    environment:
-      - HUE_CONF_fs_defaultFS=hdfs://namenode:9000
-      - HUE_CONF_webhdfs_url=http://namenode:9870/webhdfs/v1
-      - HUE_CONF_desktop_auth_backend=desktop.auth.backend.AllowAllBackend
-    networks:
-      - bigdata-net
-    depends_on:
-      - namenode
 
   datanode-pc:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
