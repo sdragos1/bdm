@@ -12,6 +12,10 @@ services:
       - HDFS_CONF_dfs_replication=1
       - HDFS_CONF_dfs_webhdfs_enabled=true
       - HDFS_CONF_dfs_permissions_enabled=false
+      - CORE_CONF_hadoop_http_cross_origin_enabled=true
+      - CORE_CONF_hadoop_http_cross_origin_allowed_origins='*'
+      - CORE_CONF_hadoop_http_cross_origin_allowed_methods=GET,POST,PUT,DELETE,HEAD,OPTIONS
+      - CORE_CONF_hadoop_http_cross_origin_allowed_headers=X-Requested-With,Content-Type,Accept,Origin
     networks:
       - bigdata-net
     volumes:
@@ -20,10 +24,23 @@ services:
   datanode-pc:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
     container_name: datanode-pc
+    hostname: datanode-pc
+    ports:
+      - "9864:9864"
     environment:
       - SERVICE_PRECONDITION=namenode:9870
       - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
       - HDFS_CONF_dfs_replication=1
+      - HDFS_CONF_dfs_webhdfs_enabled=true
+      - HDFS_CONF_dfs_permissions_enabled=false
+      - CORE_CONF_hadoop_http_cross_origin_enabled=true
+      - CORE_CONF_hadoop_http_cross_origin_allowed_origins='*'
+      - CORE_CONF_hadoop_http_cross_origin_allowed_methods=GET,POST,PUT,DELETE,HEAD,OPTIONS
+      - CORE_CONF_hadoop_http_cross_origin_allowed_headers=X-Requested-With,Content-Type,Accept,Origin
+      - HDFS_CONF_dfs_http_cross_origin_enabled=true
+      - HDFS_CONF_dfs_http_cross_origin_allowed_origins='*'
+      - HDFS_CONF_dfs_http_cross_origin_allowed_methods=GET,POST,PUT,DELETE,HEAD,OPTIONS
+      - HDFS_CONF_dfs_http_cross_origin_allowed_headers=X-Requested-With,Content-Type,Accept,Origin
     networks:
       - bigdata-net
     volumes:
