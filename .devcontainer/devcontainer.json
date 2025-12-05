@@ -1,0 +1,28 @@
+{
+  "name": "Spark Dev Env",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "spark-client",
+  "workspaceFolder": "/workspace",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/conda/bin/python",
+        "jupyter.kernels.filter": [
+          {
+            "path": "/opt/conda/bin/python",
+            "type": "pythonEnvironment"
+          }
+        ],
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "wholroyd.jinja",
+        "ms-toolsai.jupyter"
+      ]
+    }
+  },
+
+  "postCreateCommand": "pip install pandas pyarrow",
+  "remoteUser": "root"
+}

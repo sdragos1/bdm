@@ -72,20 +72,20 @@ services:
     depends_on:
       - spark-master
 
-  jupyter-dev:
-    image: jupyter/pyspark-notebook:spark-3.5.0
-    container_name: jupyter-dev
-    user: root
-    ports:
-      - "8889:8888"
-    environment:
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - JUPYTER_ENABLE_LAB=yes
-    command: start-notebook.py --IdentityProvider.token='' --ServerApp.password=''
-    volumes:
-      - ./notebooks:/home/jovyan/work
-    networks:
-      - bigdata-net
+  spark-client:
+      image: jupyter/pyspark-notebook:spark-3.5.0
+      container_name: spark-client
+      user: root
+      command: sleep infinity
+      environment:
+        - SPARK_MASTER_URL=spark://spark-master:7077
+        - PYSPARK_PYTHON=python3
+        - PYSPARK_DRIVER_PYTHON=python3
+        - PYTHONPATH=/usr/local/spark/python:/usr/local/spark/python/lib/py4j-0.10.9.7-src.zip
+      volumes:
+        - .:/workspace
+      networks:
+        - bigdata-net
 
 networks:
   bigdata-net:
