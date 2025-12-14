@@ -21,10 +21,10 @@ services:
     volumes:
       - namenode-data:/hadoop/dfs/name
 
-  datanode-pc:
+  datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
-    container_name: datanode-pc
-    hostname: datanode-pc
+    container_name: datanode
+    hostname: datanode
     ports:
       - "9864:9864"
     environment:
@@ -44,7 +44,7 @@ services:
     networks:
       - bigdata-net
     volumes:
-      - datanode-pc-data:/hadoop/dfs/data
+      - datanode-data:/hadoop/dfs/data
     depends_on:
       - namenode
 
@@ -59,9 +59,9 @@ services:
     networks:
       - bigdata-net
 
-  spark-worker-pc:
+  spark-worker:
     image: jupyter/pyspark-notebook:spark-3.5.0
-    container_name: spark-worker-pc
+    container_name: spark-worker
     user: root
     command: /usr/local/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
@@ -93,4 +93,4 @@ networks:
 
 volumes:
   namenode-data:
-  datanode-pc-data:
+  datanode-data:
