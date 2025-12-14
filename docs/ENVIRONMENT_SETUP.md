@@ -2,13 +2,40 @@
 
 ## Architecture Overview
 
-This project implements a distributed big data processing system with the following architecture:
-- **Master Node:** Windows 11 machine running Apache Spark and Python applications
-- **Worker Node:** Raspberry Pi 5 running Hadoop HDFS for distributed storage and serves as a worker node
+The project environment is containerized using **Docker** and managed via **Docker Compose**. This ensures a consistent, reproducible, and isolated Big Data processing environment without requiring complex local installations of Hadoop or Spark.
+
+The architecture consists of a cluster of containers running on a single host machine (Devcontainer setup).
+
+### Containerized Services
+The `docker-compose.yml` defines the following services connected via the `bigdata-net` bridge network:
+
+1.  **Hadoop HDFS Layer**
+    *   **Namenode (`namenode`)**: The master node for HDFS, managing file system metadata.
+        *   Image: `bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8`
+        *   Ports: `9870` (Web UI), `9000` (IPC)
+    *   **Datanode (`datanode`)**: The worker node for HDFS, storing actual data blocks.
+        *   Image: `bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8`
+        *   Ports: `9864`
+        *   Depends on: `namenode`
+
+2.  **Apache Spark Layer**
+    *   **Spark Master (`spark-master`)**: The coordinator for the Spark application.
+        *   Image: `jupyter/pyspark-notebook:spark-3.5.0`
+        *   Ports: `8080` (Web UI), `7077` (Master Port)
+    *   **Spark Worker (`spark-worker`)**: Executes tasks assigned by the master.
+        *   Image: `jupyter/pyspark-notebook:spark-3.5.0`
+        *   Resources: Configured with `4` cores and `8GB` memory.
+        *   Depends on: `spark-master`
+    *   **Spark Client (`spark-client`)**: The development container where code is edited and submitted.
+        *   Image: `jupyter/pyspark-notebook:spark-3.5.0`
+        *   Mounts: The current project directory is mounted to `/workspace`.
+        *   Environment: `PYSPARK_PYTHON=python3`, `SPARK_MASTER_URL=spark://spark-master:7077`.
 
 ---
 
-## Master Node Specifications
+## Host Machine Specifications
+
+The containers run on the following personal computer configuration:
 
 ### Hardware Configuration
 - **System:** ASUS ROG Zephyrus G16 GU605MI_GU605MI
@@ -17,82 +44,10 @@ This project implements a distributed big data processing system with the follow
   - **Logical Processors:** 22 threads (with Hyper-Threading)
   - **Base Clock:** ~1.4 GHz
   - **Max Clock Speed:** 3.8 GHz
-- **Memory:** 32,189 MB (31.4 GB) Total Physical RAM
-  - **Available:** ~12.6 GB (varies with system load)
+- **Memory:** 32GB (32,189 MB) Physical RAM
 - **Architecture:** x64-based PC
-- **System Type:** Multiprocessor Free
 
-### Software Environment
-- **Java Runtime:** Oracle Java SE 17.0.12 LTS
-  - **Build:** 17.0.12+8-LTS-286
-  - **VM:** Java HotSpot 64-Bit Server VM
-- **Python Environment:**
-  - **Version:** Python 3.13.7
-  - **Package Manager:** uv (modern Python package manager)
-  - **Virtual Environment:** `.venv/` (project-specific)
-- **Apache Spark:**
-  - **Version:** PySpark 4.0.1+
-
-
-## Worker Node Specifications (Raspberry Pi 5)
-
-### Hardware Configuration
-- **Device:** Raspberry Pi 5
-- **CPU:** ARM Cortex-A76 quad-core
-  - **Architecture:** 64-bit ARM (aarch64)
-  - **Clock Speed:** Up to 2.4 GHz
-- **Memory:** 4GB/8GB LPDDR4X SDRAM (model dependent)
-- **Storage:** MicroSD card (minimum 32GB recommended)
-- **Network:** Gigabit Ethernet + Wi-Fi 6
-
-### Software Environment
-- **Operating System:** Raspberry Pi OS Lite
-  - **Base:** Debian 12 (Bookworm)
-  - **Architecture:** ARM64
-  - **Kernel:** Linux (latest stable)
-- **Java Runtime:** OpenJDK (for Hadoop compatibility)
-- **Hadoop Ecosystem:**
-  - **Hadoop HDFS:** Distributed file system
-  - **Configuration:** Single-node cluster mode
----
-
-## Project Dependencies
-
-### Python Dependencies (pyproject.toml)
-```toml
-[project]
-name = "bdm"
-version = "0.1.0"
-requires-python = ">=3.13"
-dependencies = [
-    "pyspark>=4.0.1",
-]
-```
-
-### System Requirements
-- **Master Node:**
-  - Windows 11 (minimum Windows 10)
-  - Java 17+ LTS
-  - Python 3.13+
-  - Minimum 16GB RAM (32GB recommended)
-  - Multi-core processor (8+ cores recommended)
-  
-- **Worker Node:**
-  - Raspberry Pi OS Lite
-  - Java 11+ (OpenJDK)
-  - Minimum 4GB RAM (8GB recommended)
-  - Fast microSD card (Class 10, A2 rating)
-
----
-
-## Network Architecture
-
-### Communication Flow
-```
-Master Node (Windows 11)           Worker Node (Raspberry Pi 5)
-├── Spark Driver                   ├── HDFS DataNode
-├── Python Applications      <-->  ├── Hadoop Services
-├── Data Processing               ├── Distributed Storage
-└── Job Coordination              └── Data Replication
-```
-of the distributed big data processing environment. For specific installation and configuration procedures, refer to the accompanying setup guides.*
+### Software Environment (Host)
+- **OS:** Windows 11
+- **Container Engine:** Docker Desktop for Windows (WSL 2 Backend)
+- **IDE:** Visual Studio Code with Dev Containers extension
