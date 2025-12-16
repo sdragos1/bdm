@@ -24,5 +24,9 @@ For detailed instructions on compiling, installing, and configuring the environm
 *   **Notebook:** [recommender_system.ipynb](./notebooks/recommender_system.ipynb)
     *   *Note: Tasks and implementation logic are contained within the notebook.*
 
+### HW5: Web Graphs
+*   **Notebook:** [web_graphs.ipynb](./notebooks/web_graphs.ipynb)
+    *   *Note: Tasks and implementation logic are contained within the notebook.*
+
 ### HW1, HW2
 *   *Deleted from the repository once I had refactored my whole environment.*
